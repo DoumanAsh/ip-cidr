@@ -1,0 +1,20 @@
+[package]
+name = "ip-cidr"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80.0"
+license = "BSL-1.0"
+repository = "https://github.com/DoumanAsh/ip-cidr"
+readme = "README.md"
+description = "IP CIDR utilities"
+keywords = ["network", "ip", "address", "cidr"]
+categories = ["network-programming", "parser-implementations"]
+include = [
+    "**/*.rs",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE",
+]
+
+[profile.test]
+opt-level = 3
