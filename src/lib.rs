@@ -4,6 +4,8 @@
 #![warn(missing_docs)]
 #![allow(clippy::style)]
 
+mod parser;
+pub use parser::{parse_ip, ParseError};
 pub mod base;
 pub mod v4;
 pub mod v6;
