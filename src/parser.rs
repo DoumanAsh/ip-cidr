@@ -312,7 +312,7 @@ pub enum ParseError<'a> {
     Ipv4ComponentOverflow(u16),
     ///Address is not valid IPv6
     InvalidIpv6,
-    ///IPv6 Address must have 4 components
+    ///IPv6 Address must have 8 components
     Ipv6InvalidComponentSize(u8),
     ///IPv6 contains more than 1 zero abbreviation
     Ipv6MultipleZeroAbbrv,
@@ -355,6 +355,9 @@ impl fmt::Display for ParseError<'_> {
             Self::Ipv6CidrPrefixOverflow(prefix) => fmt.write_fmt(format_args!("Prefix '{prefix}' is greater than 128")),
         }
     }
+}
+
+impl core::error::Error for ParseError<'_> {
 }
 
 ///Performs parsing of the string into IP addr with optional CIDR prefix
