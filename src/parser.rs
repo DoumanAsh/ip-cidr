@@ -34,32 +34,42 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    const fn extract_component(&mut self, component_sep_pos: usize) -> Option<ParseError<'a>> {
-        let text = unsafe {
+    const IPV4_LEN: u8 = 4;
+    const IPV6_LEN: u8 = 8;
+
+    #[inline(always)]
+    const fn get_current_component(&self, component_sep_pos: usize) -> &'a str {
+        unsafe {
             core::str::from_utf8_unchecked(
                 slice::from_raw_parts(self.text.as_ptr().add(self.start_digit_position), component_sep_pos.saturating_sub(self.start_digit_position))
             )
-        };
+        }
+    }
 
-        let result = match self.family {
-            FamilyType::V4 => {
-                if self.components_size >= 4 {
-                    return Some(ParseError::Ipv4InvalidComponentSize(self.components_size.saturating_add(1)));
-                }
+    const fn extract_v4_component(&mut self, component_sep_pos: usize) -> Option<ParseError<'a>> {
+        let text = self.get_current_component(component_sep_pos);
+        if self.components_size >= Self::IPV4_LEN {
+            return Some(ParseError::Ipv4InvalidComponentSize(self.components_size.saturating_add(1)));
+        }
 
-                u16::from_str_radix(text, 10)
+        match u8::from_str_radix(text, 10) {
+            Ok(component) => {
+                self.components[self.components_size as usize] = component as _;
+                self.components_size = self.components_size.saturating_add(1);
+                self.start_digit_position = 0;
+                None
             },
-            FamilyType::V6 => {
-                if self.components_size >= 8 {
-                    return Some(ParseError::Ipv6InvalidComponentSize(self.components_size.saturating_add(1)));
-                }
+            Err(_) => Some(ParseError::InvalidComponent(text)),
+        }
+    }
 
-                u16::from_str_radix(text, 16)
-            },
-            FamilyType::Unknown => return None,
-        };
+    const fn extract_v6_component(&mut self, component_sep_pos: usize) -> Option<ParseError<'a>> {
+        let text = self.get_current_component(component_sep_pos);
+        if self.components_size >= Self::IPV6_LEN {
+            return Some(ParseError::Ipv6InvalidComponentSize(self.components_size.saturating_add(1)));
+        }
 
-        match result {
+        match u16::from_str_radix(text, 16) {
             Ok(component) => {
                 self.components[self.components_size as usize] = component;
                 self.components_size = self.components_size.saturating_add(1);
@@ -70,63 +80,72 @@ impl<'a> Parser<'a> {
         }
     }
 
-    const fn read_ip(&mut self) -> Result<net::IpAddr, ParseError<'a>> {
-        const IPV4_LEN: u8 = 4;
-        const IPV6_LEN: u8 = 8;
-
-        macro_rules! read_octet {
-            ($idx:expr) => {
-                match self.components[$idx] {
-                    octet @ 0..=255 => octet as u8,
-                    octet => return Err(ParseError::Ipv4ComponentOverflow(octet))
-                }
-            };
-        }
-
+    const fn read_ip_at_last(&mut self, component_sep_pos: usize) -> Result<net::IpAddr, ParseError<'a>> {
         match self.family {
-            FamilyType::V4 => if self.components_size == IPV4_LEN {
-                let a = read_octet!(0);
-                let b = read_octet!(1);
-                let c = read_octet!(2);
-                let f = read_octet!(3);
-                Ok(net::IpAddr::V4(net::Ipv4Addr::new(a, b, c, f)))
-            } else {
-                return Err(ParseError::Ipv4InvalidComponentSize(self.components_size));
-            },
-            FamilyType::V6 => if self.components_size > IPV6_LEN {
-                Err(ParseError::InvalidIpv6)
-            } else {
-                if self.components_size < IPV6_LEN {
-                    if self.flags & flag::IS_IPV6_ZERO_SKIP == flag::IS_IPV6_ZERO_SKIP {
-                        let zero_len = IPV6_LEN.saturating_sub(self.components_size);
-
-                        unsafe {
-                            //always use the *same* pointer otherwise miri will complain about retag
-                            let components_ptr = self.components.as_mut_ptr();
-                            ptr::copy(
-                                components_ptr.add(self.zero_component_start as _),
-                                components_ptr.add(self.zero_component_start.saturating_add(zero_len) as _),
-                                self.components_size.saturating_sub(self.zero_component_start) as _);
-                            ptr::write_bytes(components_ptr.add(self.zero_component_start as _), 0, zero_len as _);
-                        }
-
-                    } else {
-                        return Err(ParseError::Ipv6InvalidComponentSize(self.components_size));
-                    }
+            FamilyType::V4 => {
+                if let Some(error) = self.extract_v4_component(component_sep_pos) {
+                    return Err(error)
                 }
 
-                let ip = net::Ipv6Addr::new(
-                    self.components[0], self.components[1],
-                    self.components[2], self.components[3],
-                    self.components[4], self.components[5],
-                    self.components[6], self.components[7]
-                );
-                Ok(net::IpAddr::V6(ip))
-            },
+                if self.components_size == Self::IPV4_LEN {
+                    Ok(
+                        net::IpAddr::V4(
+                            net::Ipv4Addr::new(
+                                self.components[0] as _,
+                                self.components[1] as _,
+                                self.components[2] as _,
+                                self.components[3] as _
+                            )
+                        )
+                    )
+                } else {
+                    return Err(ParseError::Ipv4InvalidComponentSize(self.components_size));
+                }
+            }
+            FamilyType::V6 => {
+                if let Some(error) = self.extract_v6_component(component_sep_pos) {
+                    return Err(error)
+                }
+
+                self.read_ipv6()
+            }
             FamilyType::Unknown => match self.state {
                 ParserState::Initial => Err(ParseError::MissingIp),
                 _ => Err(ParseError::InvalidIp),
             }
+        }
+    }
+
+    const fn read_ipv6(&mut self) -> Result<net::IpAddr, ParseError<'a>> {
+        if self.components_size > Self::IPV6_LEN {
+            Err(ParseError::InvalidIpv6)
+        } else {
+            if self.components_size < Self::IPV6_LEN {
+                if self.flags & flag::IS_IPV6_ZERO_SKIP == flag::IS_IPV6_ZERO_SKIP {
+                    let zero_len = Self::IPV6_LEN.saturating_sub(self.components_size);
+
+                    unsafe {
+                        //always use the *same* pointer otherwise miri will complain about retag
+                        let components_ptr = self.components.as_mut_ptr();
+                        ptr::copy(
+                            components_ptr.add(self.zero_component_start as _),
+                            components_ptr.add(self.zero_component_start.saturating_add(zero_len) as _),
+                            self.components_size.saturating_sub(self.zero_component_start) as _);
+                        ptr::write_bytes(components_ptr.add(self.zero_component_start as _), 0, zero_len as _);
+                    }
+
+                } else {
+                    return Err(ParseError::Ipv6InvalidComponentSize(self.components_size));
+                }
+            }
+
+            let ip = net::Ipv6Addr::new(
+                self.components[0], self.components[1],
+                self.components[2], self.components[3],
+                self.components[4], self.components[5],
+                self.components[6], self.components[7]
+            );
+            Ok(net::IpAddr::V6(ip))
         }
     }
 
@@ -150,9 +169,9 @@ impl<'a> Parser<'a> {
                 FamilyType::V6 => return Some(ParseError::InvalidIpv6),
                 FamilyType::Unknown => {
                     self.family = FamilyType::V4;
-                    self.extract_component(pos)
+                    self.extract_v4_component(pos)
                 },
-                FamilyType::V4 => self.extract_component(pos),
+                FamilyType::V4 => self.extract_v4_component(pos),
             },
             ParserState::V4Sep | ParserState::V6Sep | ParserState::Initial => Some(ParseError::InvalidIpv4),
         };
@@ -167,9 +186,9 @@ impl<'a> Parser<'a> {
                 FamilyType::V4 => return Some(ParseError::InvalidIpv4),
                 FamilyType::Unknown => {
                     self.family = FamilyType::V6;
-                    self.extract_component(pos)
+                    self.extract_v6_component(pos)
                 },
-                FamilyType::V6 => self.extract_component(pos),
+                FamilyType::V6 => self.extract_v6_component(pos),
             },
             ParserState::V6Sep => {
                 //Only 1 zero skip is allowed
@@ -195,20 +214,15 @@ impl<'a> Parser<'a> {
     }
 
     //Handles last address component if any
-    const fn on_ip_end(&mut self, pos: usize) -> Result<net::IpAddr, ParseError<'a>> {
+    const fn on_ip_end(&mut self, last_pos: usize) -> Result<net::IpAddr, ParseError<'a>> {
         match self.state {
-            ParserState::Digit => {
-                match self.extract_component(pos) {
-                    None => self.read_ip(),
-                    Some(error) => Err(error),
-                }
-            }
+            ParserState::Digit => self.read_ip_at_last(last_pos),
             ParserState::V4Sep => Err(ParseError::InvalidIpv4),
             ParserState::V6Sep if self.flags & flag::IS_IPV6_ZERO_SKIP == flag::IS_IPV6_ZERO_SKIP => {
                 if self.components_size == 0 {
                     Ok(net::IpAddr::V6(net::Ipv6Addr::UNSPECIFIED))
                 } else {
-                    self.read_ip()
+                    self.read_ipv6()
                 }
             },
             ParserState::V6Sep => Err(ParseError::InvalidIpv6),
@@ -308,8 +322,6 @@ pub enum ParseError<'a> {
     InvalidIpv4,
     ///IPv4 Address must have 4 components
     Ipv4InvalidComponentSize(u8),
-    ///IPv4 Address component is greater than 255
-    Ipv4ComponentOverflow(u16),
     ///Address is not valid IPv6
     InvalidIpv6,
     ///IPv6 Address must have 8 components
@@ -338,7 +350,6 @@ impl fmt::Display for ParseError<'_> {
             Self::Ipv4InvalidComponentSize(size) => fmt.write_fmt(format_args!("IPv4 Address has '{size}' components but expected 4")),
             Self::Ipv6InvalidComponentSize(size) => fmt.write_fmt(format_args!("IPv6 Address has '{size}' components but expected 8")),
             Self::Ipv6MultipleZeroAbbrv => fmt.write_str("IPv6 contains more than 1 zero abbreviation"),
-            Self::Ipv4ComponentOverflow(size) => fmt.write_fmt(format_args!("IPv4 component is '{size}' while allowed range is 0..=255")),
             Self::UnexpectedCharacter(ch, pos) => fmt.write_fmt(format_args!("Encountered unexpected character '{ch}' at idx={pos}")),
             Self::InvalidCidr(cidr) => {
                 fmt.write_str("Invalid Cidr prefix: ")?;

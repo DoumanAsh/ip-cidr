@@ -74,13 +74,13 @@ fn should_not_parse_ipv4() {
         ("0.0.0", ParseError::Ipv4InvalidComponentSize(3)),
         ("127.0.0.1.5", ParseError::Ipv4InvalidComponentSize(5)),
         ("1..", ParseError::InvalidIpv4),
-        ("256.0.0.1", ParseError::Ipv4ComponentOverflow(256)),
+        ("256.0.0.1", ParseError::InvalidComponent("256")),
         ("1", ParseError::InvalidIp),
         ("1.1", ParseError::Ipv4InvalidComponentSize(2)),
         ("1.f", ParseError::InvalidComponent("f")),
         ("f.1", ParseError::InvalidComponent("f")),
         ("127.0.0.1/33", ParseError::Ipv4CidrPrefixOverflow(33)),
-        ("127.1.0.900", ParseError::Ipv4ComponentOverflow(900))
+        ("127.1.0.900", ParseError::InvalidComponent("900"))
     ];
 
     for (prefix, (text, expected_error)) in inputs.iter().enumerate() {
