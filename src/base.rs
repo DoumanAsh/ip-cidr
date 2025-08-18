@@ -31,6 +31,15 @@ impl<A: NetworkAddress> Cidr<A> {
         }
     }
 
+    #[inline]
+    ///Constructs new CIDR with single `addr`
+    pub const fn new_single(addr: A) -> Self {
+        Self {
+            addr,
+            prefix: A::BITS_LEN
+        }
+    }
+
     #[inline(always)]
     ///Returns address
     pub const fn addr(&self) -> A {

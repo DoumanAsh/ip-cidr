@@ -152,3 +152,23 @@ impl fmt::Display for Cidr {
         }
     }
 }
+
+#[inline]
+///Parses [Cidr](enum.Cidr.html) from the input `text`
+///
+///Returning `Err` if string contains invalid IP or CIDR's prefix
+///
+///Returns `Ok(None)` if `text` is valid CIDR but `prefix` overflows
+///
+///If `prefix` is missing, prefix is assumed to be only for single IP:
+///- In case of IPv4 it means prefix is assumed to be 32
+///- In case of IPv6 it means prefix is assumed to be 128
+pub const fn parse_cidr(text: &str) -> Result<Option<Cidr>, parser::ParseError<'_>> {
+    match parse_ip(text) {
+        Ok((net::IpAddr::V4(addr), None)) => Ok(Some(Cidr::V4(v4::Cidr::new_single(addr)))),
+        Ok((net::IpAddr::V4(addr), Some(prefix))) => Ok(Cidr::new_v4(addr, prefix)),
+        Ok((net::IpAddr::V6(addr), None)) => Ok(Some(Cidr::V6(v6::Cidr::new_single(addr)))),
+        Ok((net::IpAddr::V6(addr), Some(prefix))) => Ok(Cidr::new_v6(addr, prefix)),
+        Err(error) => Err(error)
+    }
+}
